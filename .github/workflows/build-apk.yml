@@ -1,4 +1,4 @@
-name: ðŸ› ï¸ Build APK depuis ZIP
+name: Build APK
 
 on:
   push:
@@ -12,62 +12,62 @@ permissions:
 
 jobs:
   build:
-    name: DÃ©compresser et construire
+    name: Decompresser et construire
     runs-on: ubuntu-latest
 
     steps:
-      - name: ðŸ“¥ Checkout du repo
+      - name: Checkout du repo
         uses: actions/checkout@v4
 
-      - name: ðŸ“¦ Localiser et dÃ©compresser le ZIP du projet
+      - name: Localiser et decompresser le ZIP du projet
         run: |
           set -e
           ZIP_FILE=$(find . -maxdepth 2 -type f \( -iname "tibo*.zip" -o -iname "*tibo-android*.zip" -o -iname "LeSonDuTibo*.zip" \) | head -1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "âŒ Aucun ZIP trouvÃ©. Attendu : tibo-android.zip Ã  la racine du repo."
+            echo "Aucun ZIP trouve. Attendu : tibo-android.zip a la racine du repo."
             echo "Contenu du repo :"
             ls -la
             exit 1
           fi
-          echo "âœ… ZIP trouvÃ© : $ZIP_FILE"
-          echo "ðŸ“¦ DÃ©compression Ã  la racineâ€¦"
+          echo "ZIP trouve : $ZIP_FILE"
+          echo "Decompression a la racine..."
           unzip -o "$ZIP_FILE" -d .
           echo ""
-          echo "ðŸ“ Arborescence aprÃ¨s dÃ©compression :"
+          echo "Arborescence apres decompression :"
           ls -la
           echo ""
-          echo "ðŸ” VÃ©rification de la structure Android :"
-          test -f settings.gradle && echo "  âœ… settings.gradle"
-          test -f build.gradle && echo "  âœ… build.gradle"
-          test -f app/build.gradle && echo "  âœ… app/build.gradle"
-          test -f app/src/main/AndroidManifest.xml && echo "  âœ… AndroidManifest.xml"
-          test -f app/src/main/assets/index.html && echo "  âœ… assets/index.html ($(du -h app/src/main/assets/index.html | cut -f1))"
+          echo "Verification de la structure Android :"
+          test -f settings.gradle && echo "  OK settings.gradle"
+          test -f build.gradle && echo "  OK build.gradle"
+          test -f app/build.gradle && echo "  OK app/build.gradle"
+          test -f app/src/main/AndroidManifest.xml && echo "  OK AndroidManifest.xml"
+          test -f app/src/main/assets/index.html && echo "  OK assets/index.html ($(du -h app/src/main/assets/index.html | cut -f1))"
 
-      - name: â˜• Java 17 (Temurin)
+      - name: Java 17 Temurin
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: ðŸ¤– Android SDK
+      - name: Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: âš™ï¸ Setup Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: ðŸ”§ GÃ©nÃ©rer le wrapper Gradle
+      - name: Generer le wrapper Gradle
         run: gradle wrapper --gradle-version 8.5
 
-      - name: ðŸ—ï¸ Build APK Debug
+      - name: Build APK Debug
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: ðŸ—ï¸ Build APK Release (non-signÃ©)
+      - name: Build APK Release non-signe
         run: ./gradlew assembleRelease --no-daemon --stacktrace
         continue-on-error: true
 
-      - name: ðŸ“¤ Upload APK Debug
+      - name: Upload APK Debug
         uses: actions/upload-artifact@v4
         with:
           name: LeSonDuTibo-debug-apk
@@ -75,7 +75,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: ðŸ“¤ Upload APK Release (non-signÃ©)
+      - name: Upload APK Release non-signe
         uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -84,7 +84,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: ðŸš€ CrÃ©er une Release GitHub (sur tag v*)
+      - name: Creer une Release GitHub sur tag v
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
@@ -92,10 +92,10 @@ jobs:
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
           generate_release_notes: true
-          name: "Le son du Tibo ${{ github.ref_name }}"
+          name: Le son du Tibo ${{ github.ref_name }}
           body: |
-            ðŸŽµ **Le son du Tibo â€” APK Android**
-
-            TÃ©lÃ©chargez `app-debug.apk` ou `app-release-unsigned.apk` puis installez sur votre tÃ©lÃ©phone (autoriser les sources inconnues si demandÃ©).
+            Le son du Tibo - APK Android.
+            Telechargez app-debug.apk ou app-release-unsigned.apk
+            puis installez sur votre telephone (autoriser les sources inconnues si demande).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
