@@ -24,101 +24,98 @@ jobs:
           set -e
           ZIP_FILE=$(find . -maxdepth 2 -type f \( -iname "tibo*.zip" -o -iname "*tibo-android*.zip" -o -iname "LeSonDuTibo*.zip" \) | head -1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "Aucun ZIP trouve. Attendu : tibo-android.zip a la racine du repo."
+            echo "Aucun ZIP trouve."
             ls -la
             exit 1
           fi
-          echo "ZIP trouve : $ZIP_FILE"
           unzip -o "$ZIP_FILE" -d .
-          echo "Arborescence apres decompression :"
-          ls -la
 
-      - name: Auto-patch HTML pour corriger le scroll dans la WebView
+      - name: Auto-patch HTML pour corriger le scroll WebView
         run: |
           python3 << 'PYEOF'
           import re
-
           path = 'app/src/main/assets/index.html'
           with open(path, 'r', encoding='utf-8') as f:
               html = f.read()
 
-          # 1. Retire toute declaration touch-action sur html,body (cause principale du blocage)
-          before = len(html)
+          # 1. Strip toute touch-action de html,body
+          html = re.sub(r'(html\s*,\s*body\s*\{[^}]*?)touch-action\s*:\s*[^;}]+;?', r'\1', html)
+          html = re.sub(r'\*\s*\{[^}]*touch-action\s*:[^}]*\}', '', html)
+
+          # 2. Strip user-scalable=no et maximum-scale qui peuvent conflicter
+          html = re.sub(r',\s*maximum-scale\s*=\s*[\d.]+', '', html)
+          html = re.sub(r',\s*user-scalable\s*=\s*\w+', '', html)
+
+          # 3. Strip overscroll-behavior:none qui peut bloquer le scroll dans certaines WebView
+          html = re.sub(r'overscroll-behavior\s*:\s*none\s*;?', '', html)
+
+          # 4. Strip overflow:hidden sur containers principaux (sauf modales)
+          # On garde overflow:hidden sur .modal-bg, .modal, .alarm-notif, .night-screen
+          # mais on retire sur main-wrap, panel, tab-content, body
           html = re.sub(
-              r'(html\s*,\s*body\s*\{[^}]*?)touch-action\s*:\s*[^;}]+;?',
+              r'(\.(main-wrap|tab-content|panel|app-container)\s*\{[^}]*?)overflow\s*:\s*hidden\s*;?',
               r'\1',
               html
           )
-          # Retire aussi un eventuel * { touch-action } trop agressif
-          html = re.sub(
-              r'\*\s*\{[^}]*touch-action\s*:[^}]*\}',
-              '',
-              html
-          )
 
-          # 2. Retire user-scalable=no et maximum-scale qui peuvent conflicter avec le pan
-          html = re.sub(
-              r',\s*maximum-scale\s*=\s*[\d.]+',
-              '',
-              html
-          )
-          html = re.sub(
-              r',\s*user-scalable\s*=\s*\w+',
-              '',
-              html
-          )
-
-          # 3. Override final qui surclasse tout (juste avant </style>)
-          override = """
-          /* ============ FORCE SCROLL FIX (injecte par workflow) ============ */
-          html {
-              touch-action: auto !important;
-              overflow-y: auto !important;
-              overflow-x: hidden !important;
-              height: auto !important;
-              -webkit-overflow-scrolling: touch !important;
+          # 5. Override CSS final (avant </style>)
+          css_override = """
+          /* ===== FORCE SCROLL â€” workflow injection ===== */
+          html { touch-action:auto !important; overflow-y:auto !important; overflow-x:hidden !important; height:auto !important; -webkit-overflow-scrolling:touch !important; }
+          body { touch-action:auto !important; overflow-y:visible !important; overflow-x:hidden !important; height:auto !important; min-height:100vh; position:static !important; }
+          .main-wrap, .tab-content, .panel, [class*="panel"]:not(.modal):not(.alarm-notif):not(.night-screen) {
+            touch-action:auto !important; overflow:visible !important; height:auto !important; max-height:none !important;
           }
-          body {
-              touch-action: auto !important;
-              overflow-y: auto !important;
-              overflow-x: hidden !important;
-              height: auto !important;
-              min-height: 100vh;
-              position: static !important;
-              -webkit-overflow-scrolling: touch !important;
-              overscroll-behavior-y: contain;
-          }
-          .main-wrap, .tab-content, .panel, [class*="panel"] {
-              touch-action: pan-y !important;
-              overflow-y: visible !important;
-              overflow-x: visible !important;
-              height: auto !important;
-              max-height: none !important;
-          }
-          /* Garde les boutons reactifs au tap */
-          button, .tab, .radio-card, .alarm-row, .t-item, .preset-btn,
-          .ctrl-btn, .ab-btn, .alarm-tog, .alarm-del, .fav-btn {
-              touch-action: manipulation;
-          }
-          /* Inputs editables */
-          input, textarea, select, [contenteditable] {
-              touch-action: auto !important;
-              user-select: text;
-          }
+          button, .tab, .radio-card, .alarm-row, .preset-btn, .ctrl-btn, .ab-btn { touch-action:manipulation; }
+          input, textarea, select { touch-action:auto !important; user-select:text; }
           """
-
           if '</style>' in html:
-              html = html.replace('</style>', override + '\n</style>', 1)
-              print("Override CSS injecte avant </style>")
-          else:
-              # Plan B : injecter un nouveau bloc style en fin de <head>
-              html = html.replace('</head>', f'<style>{override}</style>\n</head>', 1)
-              print("Nouveau bloc <style> injecte en fin de <head>")
+              html = html.replace('</style>', css_override + '\n</style>', 1)
+
+          # 6. JS runtime qui force le scroll aprÃ¨s chargement (filet de secours)
+          js_fix = """
+          <script>
+          (function(){
+            function forceScroll(){
+              try{
+                var de=document.documentElement, b=document.body;
+                de.style.setProperty('touch-action','auto','important');
+                de.style.setProperty('overflow-y','auto','important');
+                de.style.setProperty('overflow-x','hidden','important');
+                de.style.setProperty('height','auto','important');
+                b.style.setProperty('touch-action','auto','important');
+                b.style.setProperty('overflow-y','visible','important');
+                b.style.setProperty('overflow-x','hidden','important');
+                b.style.setProperty('height','auto','important');
+                b.style.setProperty('min-height','100vh','important');
+                b.style.setProperty('position','static','important');
+                // Cherche tout conteneur racine bloquant le scroll
+                document.querySelectorAll('.main-wrap,.tab-content,.panel,[class*="panel"]').forEach(function(el){
+                  if(el.classList.contains('modal')||el.classList.contains('alarm-notif')||el.classList.contains('night-screen'))return;
+                  el.style.setProperty('overflow','visible','important');
+                  el.style.setProperty('max-height','none','important');
+                  el.style.setProperty('height','auto','important');
+                  el.style.setProperty('touch-action','auto','important');
+                });
+                // Court-circuite tout preventDefault sur touchmove qui empecherait le scroll
+                document.addEventListener('touchmove',function(e){/* ne fait rien, laisse passer */},{passive:true,capture:false});
+              }catch(e){console.warn('forceScroll',e)}
+            }
+            forceScroll();
+            if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',forceScroll);
+            window.addEventListener('load',forceScroll);
+            setTimeout(forceScroll,500);
+            setTimeout(forceScroll,1500);
+            setTimeout(forceScroll,3000);
+          })();
+          </script>
+          """
+          # Injecte juste avant </body>
+          html = html.replace('</body>', js_fix + '\n</body>', 1)
 
           with open(path, 'w', encoding='utf-8') as f:
               f.write(html)
-
-          print(f"HTML patche : {before - len(html)} octets retires + override ajoute")
+          print("HTML patche : CSS strip + override + JS runtime injectes")
           PYEOF
 
       - name: Java 17 Temurin
