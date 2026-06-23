@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Decompresser et construire
+    name: Decompresser, patcher, construire
     runs-on: ubuntu-latest
 
     steps:
@@ -25,23 +25,101 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 2 -type f \( -iname "tibo*.zip" -o -iname "*tibo-android*.zip" -o -iname "LeSonDuTibo*.zip" \) | head -1)
           if [ -z "$ZIP_FILE" ]; then
             echo "Aucun ZIP trouve. Attendu : tibo-android.zip a la racine du repo."
-            echo "Contenu du repo :"
             ls -la
             exit 1
           fi
           echo "ZIP trouve : $ZIP_FILE"
-          echo "Decompression a la racine..."
           unzip -o "$ZIP_FILE" -d .
-          echo ""
           echo "Arborescence apres decompression :"
           ls -la
-          echo ""
-          echo "Verification de la structure Android :"
-          test -f settings.gradle && echo "  OK settings.gradle"
-          test -f build.gradle && echo "  OK build.gradle"
-          test -f app/build.gradle && echo "  OK app/build.gradle"
-          test -f app/src/main/AndroidManifest.xml && echo "  OK AndroidManifest.xml"
-          test -f app/src/main/assets/index.html && echo "  OK assets/index.html ($(du -h app/src/main/assets/index.html | cut -f1))"
+
+      - name: Auto-patch HTML pour corriger le scroll dans la WebView
+        run: |
+          python3 << 'PYEOF'
+          import re
+
+          path = 'app/src/main/assets/index.html'
+          with open(path, 'r', encoding='utf-8') as f:
+              html = f.read()
+
+          # 1. Retire toute declaration touch-action sur html,body (cause principale du blocage)
+          before = len(html)
+          html = re.sub(
+              r'(html\s*,\s*body\s*\{[^}]*?)touch-action\s*:\s*[^;}]+;?',
+              r'\1',
+              html
+          )
+          # Retire aussi un eventuel * { touch-action } trop agressif
+          html = re.sub(
+              r'\*\s*\{[^}]*touch-action\s*:[^}]*\}',
+              '',
+              html
+          )
+
+          # 2. Retire user-scalable=no et maximum-scale qui peuvent conflicter avec le pan
+          html = re.sub(
+              r',\s*maximum-scale\s*=\s*[\d.]+',
+              '',
+              html
+          )
+          html = re.sub(
+              r',\s*user-scalable\s*=\s*\w+',
+              '',
+              html
+          )
+
+          # 3. Override final qui surclasse tout (juste avant </style>)
+          override = """
+          /* ============ FORCE SCROLL FIX (injecte par workflow) ============ */
+          html {
+              touch-action: auto !important;
+              overflow-y: auto !important;
+              overflow-x: hidden !important;
+              height: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+          }
+          body {
+              touch-action: auto !important;
+              overflow-y: auto !important;
+              overflow-x: hidden !important;
+              height: auto !important;
+              min-height: 100vh;
+              position: static !important;
+              -webkit-overflow-scrolling: touch !important;
+              overscroll-behavior-y: contain;
+          }
+          .main-wrap, .tab-content, .panel, [class*="panel"] {
+              touch-action: pan-y !important;
+              overflow-y: visible !important;
+              overflow-x: visible !important;
+              height: auto !important;
+              max-height: none !important;
+          }
+          /* Garde les boutons reactifs au tap */
+          button, .tab, .radio-card, .alarm-row, .t-item, .preset-btn,
+          .ctrl-btn, .ab-btn, .alarm-tog, .alarm-del, .fav-btn {
+              touch-action: manipulation;
+          }
+          /* Inputs editables */
+          input, textarea, select, [contenteditable] {
+              touch-action: auto !important;
+              user-select: text;
+          }
+          """
+
+          if '</style>' in html:
+              html = html.replace('</style>', override + '\n</style>', 1)
+              print("Override CSS injecte avant </style>")
+          else:
+              # Plan B : injecter un nouveau bloc style en fin de <head>
+              html = html.replace('</head>', f'<style>{override}</style>\n</head>', 1)
+              print("Nouveau bloc <style> injecte en fin de <head>")
+
+          with open(path, 'w', encoding='utf-8') as f:
+              f.write(html)
+
+          print(f"HTML patche : {before - len(html)} octets retires + override ajoute")
+          PYEOF
 
       - name: Java 17 Temurin
         uses: actions/setup-java@v4
@@ -93,9 +171,5 @@ jobs:
             app/build/outputs/apk/release/*.apk
           generate_release_notes: true
           name: Le son du Tibo ${{ github.ref_name }}
-          body: |
-            Le son du Tibo - APK Android.
-            Telechargez app-debug.apk ou app-release-unsigned.apk
-            puis installez sur votre telephone (autoriser les sources inconnues si demande).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
